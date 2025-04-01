@@ -96,8 +96,7 @@ function Export-CMBaselines {
         }
     }
     
-    Connect-g46CMProdSite
-    # Scope specified
+        # Scope specified
     if ($Scope) {
         switch ($Scope) {
             "All" {
