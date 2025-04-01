@@ -101,7 +101,6 @@ function Export-CMConfigurationItems {
         }
     }
 
-    Connect-g46CMProdSite
     # Scope specified
     if ($Scope) {
         switch ($Scope) {
