@@ -1,0 +1,163 @@
+function Export-CMConfigurationItemsReport {
+    <#
+    .Synopsis
+    Exports Configuration Manager configuration items to a CSV file.
+    .Description
+    Exports Configuration Manager configuration items to a CSV file. Will report on LastModified, PolicyName, SettingRemediation, SettingType, SettingPath, SettingName, RuleName, RuleSetting,	BaselineName.
+    .Example
+    Export-g46CMConfigurationItemsReport -policyName "CI Name"
+    Export-g46CMBaselinesReport -scope All
+    .Parameter PolicyName
+    Enter the baseline name or multiple names. Optional
+    .Parameter Scope
+    Enter the scope to search for. All, Assigned, or Unassigned. Optional
+    #> 
+
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory = $False)]
+        [array]$PolicyName,
+        [Parameter(Mandatory = $False)]
+        [ValidateSet("All", "Assigned", "Unassigned")]$Scope
+    )
+
+    $StartingLocation = $pwd
+
+    #region Declarations
+    $FunctionName = $MyInvocation.MyCommand.Name.ToString()
+    $date = Get-Date -Format yyyyMMdd-HHmm
+    if ($outputdir.Length -eq 0) { $outputdir = $pwd }
+    $OutputFilePath = "$OutputDir\$FunctionName-$date.csv"
+    $LogFilePath = "$OutputDir\$FunctionName-$date.log"
+    $ResultsArray = @()
+    #endregion
+
+    #region Parameter Logic
+    if ($PolicyName.Count -gt 0 -and $Scope) {
+        Write-Error "Error: PolicyName and All can not be used at the same time."
+        Break
+    }
+
+    if ($null -eq $PolicyName -and $null -eq $Scope) {
+        # BaselineName not given, Scope not used.
+        $PolicyName = (Get-CMConfigurationItem -name * -fast | Select-Object DateLastModified, InUse, LocalizedDescription, LocalizedDisplayName, ObjectPath | Out-GridView -PassThru).LocalizedDisplayName
+    }
+    elseif ($null -ne $Scope) {
+        # Scope specified
+        switch ($Scope) {
+            "All" {
+                $PolicyName = (Get-CMConfigurationItem -name * -fast).LocalizedDisplayName
+                $policycount = $PolicyName.count
+                Write-Output "Gathering All configuration items"
+                Write-Output "Configuration items found: $policycount"
+            }
+            "Unassigned" {
+                $PolicyName = (Get-CMConfigurationItem -name * -fast | Where-Object { -not $_.InUse }).LocalizedDisplayName
+                $policycount = $PolicyName.count
+                Write-Output "Gathering unassigned configuration items"
+                Write-Output "Configuration items found: $policycount"
+
+            }
+            "Assigned" {
+                $PolicyName = (Get-CMConfigurationItem -name * -fast | Where-Object { $_.InUse }).LocalizedDisplayName
+                $policycount = $PolicyName.count
+                Write-Output "Gathering assigned configuration items"
+                Write-Output "Configuration Items found: $policycount"
+            }
+        }
+    }
+
+    if ($policyName) {
+        $PolicyName = $PolicyName.Trim('"')
+    }
+    foreach ($policy in $policyName) {
+        $associatedBaselineNames = @()
+
+        # Get policy details
+        $policyDetails = Get-CMConfigurationItem -Name $policy -WarningAction Ignore
+
+        if ($policyDetails.InUse) {
+            $lastIndex = $policyDetails.CI_UniqueID.LastIndexOf("_") + 1  
+            $length = $policyDetails.CI_UniqueID.Length - $lastIndex - 2
+            $CIUniqueID = $policyDetails.CI_UniqueID.Substring($lastIndex, $length)
+
+            $AllBaselines = Get-CMBaseline -Fast
+
+            foreach ($baseline in $AllBaselines) {
+                $baselineName = $baseline.LocalizedDisplayName
+                $XMLContent = $baseline | Get-CMBaselineXMLDefinition
+
+                if ($XMLContent -match $CIUniqueID) {
+                    $associatedBaselineNames += $baselineName
+                }
+            }
+            Write-Output "Configuration Item: $($policyDetails.localizeddisplayName) found $($associatedBaselineNames.count) associated baselines"
+        }
+        if (!$policyDetails.InUse) {
+            Write-Output "Configuration Item: $($policydetails.localizedDisplayName) is not in use" -level warning
+        }
+
+        foreach ($name in $policyDetails.LocalizedDisplayName) {
+            $policyRules = Get-CMComplianceRule -Name $name -WarningAction Ignore
+            $policySettings = Get-CMComplianceSetting -Name $name -WarningAction Ignore | Select-Object -Unique
+
+            foreach ($rule in $policyRules) {
+
+                foreach ($setting in $policySettings) {
+                    # Determine registry data type
+                    switch ($setting.settingdataType.Name) {
+                        "Int64" { $settingdatatypeName = "DWORD" }
+                        "String" { $settingdatatypeName = "STRING" }
+                        "String" { $settingdatatypeName = "DATE AND TIME" }
+                        "Version" { $settingdatatypeName = "VERSION" }
+                        "StringArray" { $settingdatatypeName = "MULTI_STRING" }
+                        default { $settingdatatypeName = $setting.settingdataType.Name }
+                    }
+
+                    # Determine rule type
+                    $ruleType = if ($rule.expression.operands.methodType -eq "Count") { "Existenal" } else { $rule.expression.operands.methodType }
+
+                    if ($ruleType -eq "Existenal") {
+                        $ruleValue = switch ($rule.expression.operands.Value) {
+                            "0" { "Registry value must exist on client devices" }
+                            "1" { "Registry value must not exist on client devices" }
+                            default { $rule.expression.operands.Value }
+                        }
+                    }
+                    else {
+                        $ruleValue = $rule.expression.operands.Value
+                    }
+
+                    $result = New-Object -TypeName PSObject -Property @{
+                        LastModified       = $policyDetails.DateLastModified
+                        PolicyName         = $policyDetails.LocalizedDisplayName
+                        RuleName           = $rule.Name
+                        SettingRemediation = $setting.SupportsRemediation
+                        RuleType           = $ruleType
+                        RuleValue          = $ruleValue
+                        SettingType        = $setting.SourceType
+                        SettingDataType    = $settingdatatypeName
+                        SettingPath        = $setting.Location
+                        SettingName        = if ($setting.ValueName) { $setting.ValueName } else { $setting.Name }
+                        BaselineName       = $associatedbaselineNames -join "; "
+                    }
+                    $ResultsArray += $result
+                }
+            }
+        }
+    }
+
+    #region Results
+    if ($resultsArray.count -ge 1) {
+        $ResultsArray | Select-Object LastModified, PolicyName, SettingRemediation, SettingType, SettingDataType, SettingPath, SettingName, RuleName, RuleType, RuleValue, BaselineName | Sort-Object -Property BaselineName | Export-Csv -Path $outputfilepath -NoTypeInformation
+    }
+    #Test if results file was created
+    If (Test-Path $outputfilepath) {
+        Write-Output "Results found. Results file=$outputfilepath."
+    }
+    else {
+        Write-Warning "No results found."
+    }
+    #endregion
+    Set-Location $startingLocation
+}
