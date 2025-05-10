@@ -52,6 +52,9 @@ function Export-CMConfigurationItemsReport {
 
     $StartingLocation = $pwd
 
+    #Connect to CM Site
+    Connect-CMSite
+
     #region Declarations
     $FunctionName = $MyInvocation.MyCommand.Name.ToString()
     $date = Get-Date -Format yyyyMMdd-HHmm
