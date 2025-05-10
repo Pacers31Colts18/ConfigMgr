@@ -1,24 +1,53 @@
 function Export-CMConfigurationItemsReport {
-    <#
-    .Synopsis
+<#
+.SYNOPSIS
     Exports Configuration Manager configuration items to a CSV file.
-    .Description
-    Exports Configuration Manager configuration items to a CSV file. Will report on LastModified, PolicyName, SettingRemediation, SettingType, SettingPath, SettingName, RuleName, RuleSetting,	BaselineName.
-    .Example
-    Export-g46CMConfigurationItemsReport -policyName "CI Name"
-    Export-g46CMBaselinesReport -scope All
-    .Parameter PolicyName
-    Enter the baseline name or multiple names. Optional
-    .Parameter Scope
-    Enter the scope to search for. All, Assigned, or Unassigned. Optional
-    #> 
+
+.DESCRIPTION
+    This function retrieves Configuration Manager (SCCM) configuration items and exports them to a CSV file.
+    It gathers data on last modified date, policy name, compliance settings, rule types, and assigned baselines.
+
+.PARAMETER PolicyName
+    Specifies the name(s) of the Configuration Items (CI) to export.
+    - If provided, the function will return details only for the specified CI(s).
+    - If omitted, it will retrieve all configuration items based on the Scope parameter.
+
+.PARAMETER Scope
+    Defines the scope of configuration items to be exported:
+    - `"All"`: Returns all configuration items.
+    - `"Assigned"`: Returns only assigned configuration items.
+    - `"Unassigned"`: Returns only unassigned configuration items.
+    - If omitted, will default to All.
+
+.EXAMPLE
+    Export-CMConfigurationItemsReport -PolicyName "CI Name"
+    Retrieves details for the specified Configuration Item and exports them.
+
+.EXAMPLE
+    Export-CMConfigurationItemsReport -Scope "All"
+    Retrieves details for all configuration items and exports them.
+
+.EXAMPLE
+    Export-CMConfigurationItemsReport -Scope "Assigned"
+    Retrieves only assigned configuration items and exports them.
+
+.EXAMPLE
+    Export-CMConfigurationItemsReport -Scope "Unassigned"
+    Retrieves only unassigned configuration items and exports them.
+
+.NOTES
+    - This function interacts with SCCM using PowerShell cmdlets to extract information.
+    - The output is stored as a CSV file in the working directory with a timestamped filename.
+    - Requires SCCM PowerShell module access to execute successfully.
+
+#>
 
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory = $False)]
         [array]$PolicyName,
         [Parameter(Mandatory = $False)]
-        [ValidateSet("All", "Assigned", "Unassigned")]$Scope
+        [ValidateSet("All", "Assigned", "Unassigned")]$Scope = "All"
     )
 
     $StartingLocation = $pwd
