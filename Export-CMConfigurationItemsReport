@@ -5,22 +5,22 @@ function Export-CMConfigurationItemsReport {
 
 .DESCRIPTION
     This function retrieves Configuration Manager (SCCM) configuration items and exports them to a CSV file.
-    It gathers data on last modified date, policy name, compliance settings, rule types, and assigned baselines.
+    It gathers data on last modified date, policy name, compliance settings, rule types, and associated baselines.
 
 .PARAMETER PolicyName
     Specifies the name(s) of the Configuration Items (CI) to export.
-    - If provided, the function will return details only for the specified CI(s).
-    - If omitted, it will retrieve all configuration items based on the Scope parameter.
+    - If provided, the function returns details only for the specified CI(s).
+    - If omitted, the function retrieves configuration items based on the Scope parameter or allows interactive selection.
 
 .PARAMETER Scope
     Defines the scope of configuration items to be exported:
     - `"All"`: Returns all configuration items.
     - `"Assigned"`: Returns only assigned configuration items.
     - `"Unassigned"`: Returns only unassigned configuration items.
-    - If omitted, will default to All.
+    - If omitted, defaults to interactive selection via `Out-GridView`.
 
 .EXAMPLE
-    Export-CMConfigurationItemsReport -PolicyName "CI Name"
+    Export-CMConfigurationItemsReport -PolicyName "Example CI"
     Retrieves details for the specified Configuration Item and exports them.
 
 .EXAMPLE
@@ -36,25 +36,23 @@ function Export-CMConfigurationItemsReport {
     Retrieves only unassigned configuration items and exports them.
 
 .NOTES
-    - This function interacts with SCCM using PowerShell cmdlets to extract information.
-    - The output is stored as a CSV file in the working directory with a timestamped filename.
-    - Requires SCCM PowerShell module access to execute successfully.
-
+    - Requires SCCM PowerShell module access.
+    - If `PolicyName` and `Scope` are both omitted, the function prompts for selection via `Out-GridView`.
+    - The exported CSV file is stored in the working directory with a timestamped filename.
 #>
 
+    
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory = $False)]
         [array]$PolicyName,
         [Parameter(Mandatory = $False)]
-        [ValidateSet("All", "Assigned", "Unassigned")]$Scope = "All"
+        [ValidateSet("All", "Assigned", "Unassigned")]$Scope
     )
-
+    
     $StartingLocation = $pwd
-
-    #Connect to CM Site
     Connect-CMSite
-
+    
     #region Declarations
     $FunctionName = $MyInvocation.MyCommand.Name.ToString()
     $date = Get-Date -Format yyyyMMdd-HHmm
@@ -63,62 +61,50 @@ function Export-CMConfigurationItemsReport {
     $LogFilePath = "$OutputDir\$FunctionName-$date.log"
     $ResultsArray = @()
     #endregion
-
+    
     #region Parameter Logic
-    if ($PolicyName.Count -gt 0 -and $Scope) {
-        Write-Error "Error: PolicyName and All can not be used at the same time."
+    if ($PolicyName.Count -gt 0 -and $Scope -eq "All") {
+        Write-Error "Error: PolicyName and All cannot be used at the same time."
         Break
     }
 
     if ($null -eq $PolicyName -and $null -eq $Scope) {
-        # BaselineName not given, Scope not used.
         $PolicyName = (Get-CMConfigurationItem -name * -fast | Select-Object DateLastModified, InUse, LocalizedDescription, LocalizedDisplayName, ObjectPath | Out-GridView -PassThru).LocalizedDisplayName
     }
     elseif ($null -ne $Scope) {
-        # Scope specified
-        switch ($Scope) {
-            "All" {
-                $PolicyName = (Get-CMConfigurationItem -name * -fast).LocalizedDisplayName
-                $policycount = $PolicyName.count
-                Write-Output "Gathering All configuration items"
-                Write-Output "Configuration items found: $policycount"
-            }
-            "Unassigned" {
-                $PolicyName = (Get-CMConfigurationItem -name * -fast | Where-Object { -not $_.InUse }).LocalizedDisplayName
-                $policycount = $PolicyName.count
-                Write-Output "Gathering unassigned configuration items"
-                Write-Output "Configuration items found: $policycount"
 
+        if ($null -eq $PolicyName) {
+            $AllConfigItems = Get-CMConfigurationItem -Name * -Fast
+
+            switch ($Scope) {
+                "All" { $PolicyName = $AllConfigItems.LocalizedDisplayName }
+                "Unassigned" { $PolicyName = $AllConfigItems | Where-Object { -not $_.InUse } | Select-Object -ExpandProperty LocalizedDisplayName }
+                "Assigned" { $PolicyName = $AllConfigItems | Where-Object { $_.InUse } | Select-Object -ExpandProperty LocalizedDisplayName }
             }
-            "Assigned" {
-                $PolicyName = (Get-CMConfigurationItem -name * -fast | Where-Object { $_.InUse }).LocalizedDisplayName
-                $policycount = $PolicyName.count
-                Write-Output "Gathering assigned configuration items"
-                Write-Output "Configuration Items found: $policycount"
-            }
+            Write-Output -message "Gathering configuration items based on scope: $Scope"
         }
     }
+    Write-Output -message "Configuration items found: $($PolicyName.Count)"
+    #endregion
 
-    if ($policyName) {
-        $PolicyName = $PolicyName.Trim('"')
-    }
-    foreach ($policy in $policyName) {
+    
+    foreach ($policy in $PolicyName) {
         $associatedBaselineNames = @()
 
         # Get policy details
         $policyDetails = Get-CMConfigurationItem -Name $policy -WarningAction Ignore
-
+    
         if ($policyDetails.InUse) {
             $lastIndex = $policyDetails.CI_UniqueID.LastIndexOf("_") + 1  
             $length = $policyDetails.CI_UniqueID.Length - $lastIndex - 2
             $CIUniqueID = $policyDetails.CI_UniqueID.Substring($lastIndex, $length)
-
+    
             $AllBaselines = Get-CMBaseline -Fast
-
+    
             foreach ($baseline in $AllBaselines) {
                 $baselineName = $baseline.LocalizedDisplayName
                 $XMLContent = $baseline | Get-CMBaselineXMLDefinition
-
+    
                 if ($XMLContent -match $CIUniqueID) {
                     $associatedBaselineNames += $baselineName
                 }
@@ -126,70 +112,65 @@ function Export-CMConfigurationItemsReport {
             Write-Output "Configuration Item: $($policyDetails.localizeddisplayName) found $($associatedBaselineNames.count) associated baselines"
         }
         if (!$policyDetails.InUse) {
-            Write-Output "Configuration Item: $($policydetails.localizedDisplayName) is not in use" -level warning
+            Write-Warning "Configuration Item: $($policydetails.localizedDisplayName) is not in use"
         }
-
-        foreach ($name in $policyDetails.LocalizedDisplayName) {
-            $policyRules = Get-CMComplianceRule -Name $name -WarningAction Ignore
-            $policySettings = Get-CMComplianceSetting -Name $name -WarningAction Ignore | Select-Object -Unique
-
-            foreach ($rule in $policyRules) {
-
-                foreach ($setting in $policySettings) {
-                    # Determine registry data type
-                    switch ($setting.settingdataType.Name) {
-                        "Int64" { $settingdatatypeName = "DWORD" }
-                        "String" { $settingdatatypeName = "STRING" }
-                        "String" { $settingdatatypeName = "DATE AND TIME" }
-                        "Version" { $settingdatatypeName = "VERSION" }
-                        "StringArray" { $settingdatatypeName = "MULTI_STRING" }
-                        default { $settingdatatypeName = $setting.settingdataType.Name }
-                    }
-
-                    # Determine rule type
-                    $ruleType = if ($rule.expression.operands.methodType -eq "Count") { "Existenal" } else { $rule.expression.operands.methodType }
-
-                    if ($ruleType -eq "Existenal") {
-                        $ruleValue = switch ($rule.expression.operands.Value) {
-                            "0" { "Registry value must exist on client devices" }
-                            "1" { "Registry value must not exist on client devices" }
-                            default { $rule.expression.operands.Value }
-                        }
-                    }
-                    else {
-                        $ruleValue = $rule.expression.operands.Value
-                    }
-
-                    $result = New-Object -TypeName PSObject -Property @{
-                        LastModified       = $policyDetails.DateLastModified
-                        PolicyName         = $policyDetails.LocalizedDisplayName
-                        RuleName           = $rule.Name
-                        SettingRemediation = $setting.SupportsRemediation
-                        RuleType           = $ruleType
-                        RuleValue          = $ruleValue
-                        SettingType        = $setting.SourceType
-                        SettingDataType    = $settingdatatypeName
-                        SettingPath        = $setting.Location
-                        SettingName        = if ($setting.ValueName) { $setting.ValueName } else { $setting.Name }
-                        BaselineName       = $associatedbaselineNames -join "; "
-                    }
-                    $ResultsArray += $result
+    
+        # Retrieve Compliance Settings and Rules
+        $policyRules = Get-CMComplianceRule -Name $policyDetails.LocalizedDisplayName -WarningAction Ignore
+        $policySettings = Get-CMComplianceSetting -Name $policyDetails.LocalizedDisplayName -WarningAction Ignore | Select-Object -Unique
+    
+        foreach ($rule in $policyRules) {
+            foreach ($setting in $policySettings) {
+    
+                # Determine Setting Type
+                $settingdatatypeName = switch ($setting.settingdataType.Name) {
+                    "Int64" { "DWORD" }
+                    "String" { "STRING" }
+                    "StringArray" { "MULTI_STRING" }
+                    default { $setting.settingdataType.Name }
                 }
+    
+                # Determine Rule Type & Value
+                $ruleType = if ($rule.expression.operands | Where-Object { $_.methodType -eq "Count" }) { "Existential" } else { $rule.expression.operands.methodType }
+                $ruleValue = if ($ruleType -eq "Existential") {
+                    switch ($rule.expression.operands.Value) {
+                        "0" { "Registry value must exist on client devices" }
+                        "1" { "Registry value must not exist on client devices" }
+                        default { $rule.expression.operands.Value }
+                    }
+                }
+                else {
+                    $rule.expression.operands.Value
+                }
+    
+                $result = New-Object -TypeName PSObject -Property @{
+                    LastModified       = $policyDetails.DateLastModified
+                    PolicyName         = $policyDetails.LocalizedDisplayName
+                    RuleName           = $rule.Name
+                    SettingRemediation = $setting.SupportsRemediation
+                    RuleType           = $ruleType
+                    RuleValue          = $ruleValue
+                    SettingType        = $setting.SourceType
+                    SettingDataType    = $settingdatatypeName
+                    SettingPath        = $setting.Location
+                    SettingName        = if ($setting.ValueName) { $setting.ValueName } else { $setting.Name }
+                    BaselineName       = $associatedBaselineNames -join "; "
+                }
+                $ResultsArray += $result
             }
         }
     }
-
-    #region Results
-    if ($resultsArray.count -ge 1) {
-        $ResultsArray | Select-Object LastModified, PolicyName, SettingRemediation, SettingType, SettingDataType, SettingPath, SettingName, RuleName, RuleType, RuleValue, BaselineName | Sort-Object -Property BaselineName | Export-Csv -Path $outputfilepath -NoTypeInformation
-    }
-    #Test if results file was created
-    If (Test-Path $outputfilepath) {
-        Write-Output "Results found. Results file=$outputfilepath."
+    
+    #region Export Results
+    if ($ResultsArray.Count -ge 1) {
+        $ResultsArray | Sort-Object BaselineName | Export-Csv -Path $OutputFilePath -NoTypeInformation
+        Write-Output "Results found. Results file=$OutputFilePath."
     }
     else {
         Write-Warning "No results found."
     }
+    
+    Set-Location $StartingLocation
     #endregion
-    Set-Location $startingLocation
 }
+    
