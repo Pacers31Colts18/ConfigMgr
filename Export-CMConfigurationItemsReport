@@ -1,5 +1,5 @@
 function Export-CMConfigurationItemsReport {
-<#
+    <#
 .SYNOPSIS
     Exports Configuration Manager configuration items to a CSV file.
 
@@ -51,7 +51,7 @@ function Export-CMConfigurationItemsReport {
     )
     
     $StartingLocation = $pwd
-    Connect-CMSite
+    Connect-g46CMProdSite
     
     #region Declarations
     $FunctionName = $MyInvocation.MyCommand.Name.ToString()
@@ -81,10 +81,10 @@ function Export-CMConfigurationItemsReport {
                 "Unassigned" { $PolicyName = $AllConfigItems | Where-Object { -not $_.InUse } | Select-Object -ExpandProperty LocalizedDisplayName }
                 "Assigned" { $PolicyName = $AllConfigItems | Where-Object { $_.InUse } | Select-Object -ExpandProperty LocalizedDisplayName }
             }
-            Write-Output -message "Gathering configuration items based on scope: $Scope"
+            Write-Output "Gathering configuration items based on scope: $Scope"
         }
     }
-    Write-Output -message "Configuration items found: $($PolicyName.Count)"
+    Write-Output "Configuration items found: $($PolicyName.Count)"
     #endregion
 
     
@@ -129,7 +129,9 @@ function Export-CMConfigurationItemsReport {
                     "StringArray" { "MULTI_STRING" }
                     default { $setting.settingdataType.Name }
                 }
-    
+
+                $settingLocation = $setting.location -replace '^HKEY_LOCAL_MACHINE', 'HKLM:' -replace '^HKEY_CURRENT_USER', 'HKCU:'
+
                 # Determine Rule Type & Value
                 $ruleType = if ($rule.expression.operands | Where-Object { $_.methodType -eq "Count" }) { "Existential" } else { $rule.expression.operands.methodType }
                 $ruleValue = if ($ruleType -eq "Existential") {
@@ -142,7 +144,7 @@ function Export-CMConfigurationItemsReport {
                 else {
                     $rule.expression.operands.Value
                 }
-    
+                        
                 $result = New-Object -TypeName PSObject -Property @{
                     LastModified       = $policyDetails.DateLastModified
                     PolicyName         = $policyDetails.LocalizedDisplayName
@@ -152,14 +154,15 @@ function Export-CMConfigurationItemsReport {
                     RuleValue          = $ruleValue
                     SettingType        = $setting.SourceType
                     SettingDataType    = $settingdatatypeName
-                    SettingPath        = $setting.Location
+                    SettingPath        = $settinglocation
                     SettingName        = if ($setting.ValueName) { $setting.ValueName } else { $setting.Name }
                     BaselineName       = $associatedBaselineNames -join "; "
                 }
+                
                 $ResultsArray += $result
             }
         }
-    }
+    }                
     
     #region Export Results
     if ($ResultsArray.Count -ge 1) {
